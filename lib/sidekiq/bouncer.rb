@@ -23,7 +23,9 @@ module Sidekiq
 
     def debounce(*params)
       # Refresh the timestamp in redis with debounce delay added.
-      self.class.config.redis.set(key(params), now + @delay)
+      Sidekiq.redis_pool.with do |redis|
+        redis.set(key(params), now + @delay)
+      end
 
       # Schedule the job with not only debounce delay added, but also BUFFER.
       # BUFFER helps prevent race condition between this line and the one above.
@@ -32,14 +34,16 @@ module Sidekiq
 
     def let_in?(*params)
       # Only the last job should come after the timestamp.
-      timestamp = self.class.config.redis.get(key(params))
-      return false if Time.now.to_i < timestamp.to_i
+      Sidekiq.redis_pool.with do |redis|
+        timestamp = redis.get(key(params))
+        return false if Time.now.to_i < timestamp.to_i
 
-      # But because of BUFFER, there could be mulitple last jobs enqueued within
-      # the span of BUFFER. The first one will clear the timestamp, and the rest
-      # will skip when they see that the timestamp is gone.
-      return false if timestamp.nil?
-      self.class.config.redis.del(key(params))
+        # But because of BUFFER, there could be mulitple last jobs enqueued within
+        # the span of BUFFER. The first one will clear the timestamp, and the rest
+        # will skip when they see that the timestamp is gone.
+        return false if timestamp.nil?
+        redis.del(key(params))
+      end
 
       true
     end
